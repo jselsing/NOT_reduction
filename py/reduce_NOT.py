@@ -20,10 +20,11 @@ import astroscrappy
 
 class NOTdataset(object):
 
-    def __init__(self, input_dir, output_dir):
+    def __init__(self, input_dir, output_dir, instrument):
 
         self.input_dir = input_dir
         self.output_dir = output_dir
+        self.instrument = instrument
 
         try:
             os.mkdir(self.input_dir)
@@ -37,14 +38,19 @@ class NOTdataset(object):
         # Construct datasets based on file categories and image sizes
         self.filelist = glob.glob(self.input_dir + "*.fits")
         self.bias_files = [ii for ii in self.filelist if "bias" in fits.open(ii)[0].header["OBJECT"]]
-        self.flat_files = [ii for ii in self.filelist if "FLAT" in fits.open(ii)[0].header["OBJECT"]]
+        flatnames = ["flatR", "FLAT"]
+        self.flat_files = [ii for ii in self.filelist if fits.open(ii)[0].header["OBJECT"] in flatnames]
         self.science_files = [ii for ii in self.filelist if "SCIENCE" in fits.open(ii)[0].header["IMAGECAT"]]
 
         # Loop through science files and find unique filter names
         filters = []
         sizes, xbins, ybins = [], [], []
         for ii in self.science_files:
-            filt = fits.open(ii)[0].header["FAFLTNM"]
+            if self.instrument == "AlFOSC":
+                filt = fits.open(ii)[0].header["FAFLTNM"]
+            elif self.instrument == "StanCam":
+                filt = fits.open(ii)[0].header["STFLTNM"]
+
             size = fits.open(ii)[0].header["DETWIN1"]
             xbin = fits.open(ii)[0].header["DETXBIN"]
             ybin = fits.open(ii)[0].header["DETYBIN"]
@@ -61,9 +67,17 @@ class NOTdataset(object):
 
         self.datasets = {}
         for ii, ll, jj, hh in list(zip(self.filters, self.sizes, self.xbins, self.ybins)):
-            science_files = [kk for kk in self.science_files if ii in fits.open(kk)[0].header["FAFLTNM"]]
-            flat_files = [kk for kk in self.flat_files if ii in fits.open(kk)[0].header["FAFLTNM"] and ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
-            bias_files = [kk for kk in self.bias_files if ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
+
+            if self.instrument == "AlFOSC":
+                science_files = [kk for kk in self.science_files if ii in fits.open(kk)[0].header["FAFLTNM"]]
+                flat_files = [kk for kk in self.flat_files if ii in fits.open(kk)[0].header["FAFLTNM"] and ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
+                bias_files = [kk for kk in self.bias_files if ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
+            elif self.instrument == "StanCam":
+                science_files = [kk for kk in self.science_files if ii in fits.open(kk)[0].header["STFLTNM"]]
+                flat_files = [kk for kk in self.flat_files if ii in fits.open(kk)[0].header["STFLTNM"] and ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
+                bias_files = [kk for kk in self.bias_files if ll == fits.open(kk)[0].header["DETWIN1"] and jj == fits.open(kk)[0].header["DETXBIN"] and hh == fits.open(kk)[0].header["DETYBIN"]]
+
+
             self.datasets[ii] = [science_files, flat_files, bias_files]
 
 
@@ -88,7 +102,7 @@ class NOTdataset(object):
             bias_list[ii] = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
 
         self.master_bias = ccdproc.combine(bias_list)
-        self.master_bias.write(self.output_dir+"/"+self.filename+"_masterbias.fits", clobber=True)
+        self.master_bias.write(self.output_dir+"/"+self.filename+"_masterbias.fits", overwrite=True)
 
         # minlim, maxlim = np.percentile(master_bias, (1, 99))
         # pl.imshow(master_bias, vmax=maxlim, vmin=minlim, cmap="viridis")
@@ -101,8 +115,8 @@ class NOTdataset(object):
             flat = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
             flat_list[ii] = ccdproc.subtract_bias(flat, self.master_bias)
 
-        self.master_flat = ccdproc.combine(flat_list)
-        self.master_flat.write(self.output_dir+"/"+self.filename+"_masterflat.fits", clobber=True)
+        self.master_flat = ccdproc.combine(flat_list, method="median", scale=np.median)
+        self.master_flat.write(self.output_dir+"/"+self.filename+"_masterflat.fits", overwrite=True)
 
         # minlim, maxlim = np.percentile(self.master_flat, (1, 99))
         # pl.imshow(self.master_flat, vmax=maxlim, vmin=minlim, cmap="viridis")
@@ -111,33 +125,57 @@ class NOTdataset(object):
 
     def make_science(self, list_of_sciencefiles):
         science_list = [0]*len(list_of_sciencefiles)
+        coverages = [0]*len(list_of_sciencefiles)
         for ii, kk in enumerate(list_of_sciencefiles):
             fitsfile = fits.open(kk)
-            fitsfile_common, _ = reproject_interp(fitsfile, fits.open(list_of_sciencefiles[0])[1].header, hdu_in=1)
+            fitsfile_common, coverage = reproject_interp(fitsfile, fits.open(list_of_sciencefiles[0])[1].header, hdu_in=1)
+
             science = ccdproc.CCDData(data=fitsfile_common, meta=fitsfile[1].header, unit="adu")
-            science_list[ii] = ccdproc.ccd_process(science, master_bias=self.master_bias, master_flat=self.master_flat, gain_corrected=False)
+            bias_sub = ccdproc.subtract_bias(science, self.master_bias)
+            flat_corr = ccdproc.flat_correct(bias_sub, self.master_flat)
+            science_list[ii] = flat_corr
+            # science_list[ii] = ccdproc.ccd_process(science, master_bias=self.master_bias, master_flat=self.master_flat)
+            coverages[ii] = ccdproc.CCDData(data=coverage, meta=fitsfile[1].header, unit="adu")
 
 
 
         self.combined_science = ccdproc.combine(science_list, method="median")
+        self.combined_coverage = ccdproc.combine(coverages, method="sum")
 
         self.master_science = ccdproc.cosmicray_lacosmic(self.combined_science, sigclip=5)
 
-        self.master_science.write(self.output_dir+"/"+self.filename+".fits", clobber=True)
 
+
+        # outfile = fits.open(list_of_sciencefiles[0])
+        # outfile[1].data = self.master_science.data
+        # outfile[1].header = self.master_science.header
+        header0 = fits.open(list_of_sciencefiles[0])[0].header
+        for key in header0:
+            # print(str(key), header0[str(key)])
+            if "COMMENT" in key:
+                continue
+            self.master_science.header[str(key)] = header0[str(key)]
+
+        # outfile[0].header["NAXIS1"] = np.shape(self.master_science.data)[0]
+        # outfile[0].header["NAXIS2"] = np.shape(self.master_science.data)[1]
+        # outfile[1].header["NAXIS1"] = np.shape(self.master_science.data)[0]
+        # outfile[1].header["NAXIS2"] = np.shape(self.master_science.data)[1]
+
+        # outfile.writeto(self.output_dir+"/"+self.filename+".fits", clobber=True)
+        self.master_science.write(self.output_dir+"/"+self.filename+".fits", overwrite=True)
         # minlim, maxlim = np.percentile(self.master_science, (14, 86))
         # pl.imshow(self.master_science, vmax=maxlim, vmin=minlim, cmap="viridis")
         # pl.show()
 
 def main():
 
-    input_dir = "/Users/jselsing/Work/work_rawDATA/NOT/GRBs/GRB1710101A/"
+    input_dir = "/Users/jselsing/Work/work_rawDATA/NOT/GRBs/GRB180624A/"
     outdir = input_dir + "reduced_data"
 
+    instrument = "StanCam"
 
 
-
-    datasets = NOTdataset(input_dir, outdir)
+    datasets = NOTdataset(input_dir, outdir, instrument)
 
     datasets.make_reduction()
 
