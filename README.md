@@ -1,2 +1,2 @@
 # NOT_reduction
-Automated imaging reduction for NOT/ALFOSC
+Automated imaging reduction for NOT imaging
