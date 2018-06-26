@@ -99,12 +99,13 @@ class NOTdataset(object):
         bias_list = [0]*len(list_of_biasfiles)
         for ii, kk in enumerate(list_of_biasfiles):
             fitsfile = fits.open(kk)
-            bias_list[ii] = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
+            bias = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
+            bias_list[ii] = ccdproc.subtract_overscan(bias, fits_section='[5:35, :]')
 
-        self.master_bias = ccdproc.combine(bias_list)
+        self.master_bias = ccdproc.combine(bias_list, method="median")
         self.master_bias.write(self.output_dir+"/"+self.filename+"_masterbias.fits", overwrite=True)
 
-        # minlim, maxlim = np.percentile(master_bias, (1, 99))
+        # print(np.percentile(self.master_bias, (1, 50, 99)))
         # pl.imshow(master_bias, vmax=maxlim, vmin=minlim, cmap="viridis")
         # pl.show()
 
@@ -113,9 +114,14 @@ class NOTdataset(object):
         for ii, kk in enumerate(list_of_flatfiles):
             fitsfile = fits.open(kk)
             flat = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
-            flat_list[ii] = ccdproc.subtract_bias(flat, self.master_bias)
+            flat_scan = ccdproc.subtract_overscan(flat, fits_section='[5:35, :]')
+            flat_bias = ccdproc.subtract_bias(flat_scan, self.master_bias)
+            flat_bias.data /= np.median(flat_bias.data)
+            flat_list[ii] = flat_bias
 
-        self.master_flat = ccdproc.combine(flat_list, method="median", scale=np.median)
+        self.master_flat = ccdproc.combine(flat_list, method="median", scale=np.median, weight=np.median, sigma_clip=True)
+
+
         self.master_flat.write(self.output_dir+"/"+self.filename+"_masterflat.fits", overwrite=True)
 
         # minlim, maxlim = np.percentile(self.master_flat, (1, 99))
@@ -124,45 +130,45 @@ class NOTdataset(object):
 
 
     def make_science(self, list_of_sciencefiles):
+
+
         science_list = [0]*len(list_of_sciencefiles)
-        coverages = [0]*len(list_of_sciencefiles)
+        science_names = [0]*len(list_of_sciencefiles)
         for ii, kk in enumerate(list_of_sciencefiles):
             fitsfile = fits.open(kk)
-            fitsfile_common, coverage = reproject_interp(fitsfile, fits.open(list_of_sciencefiles[0])[1].header, hdu_in=1)
+            science = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
 
-            science = ccdproc.CCDData(data=fitsfile_common, meta=fitsfile[1].header, unit="adu")
-            bias_sub = ccdproc.subtract_bias(science, self.master_bias)
+            overscan_sub = ccdproc.subtract_overscan(science, fits_section='[5:35, :]')
+            bias_sub = ccdproc.subtract_bias(overscan_sub, self.master_bias)
             flat_corr = ccdproc.flat_correct(bias_sub, self.master_flat)
-            science_list[ii] = flat_corr
-            # science_list[ii] = ccdproc.ccd_process(science, master_bias=self.master_bias, master_flat=self.master_flat)
-            coverages[ii] = ccdproc.CCDData(data=coverage, meta=fitsfile[1].header, unit="adu")
+
+            # science_list[ii] = flat_corr
+            flat_corr.write(self.output_dir+"/"+self.filename+"_"+str(ii)+".fits", overwrite=True)
+            science_names[ii] = self.output_dir+"/"+self.filename+"_"+str(ii)+".fits"
 
 
+
+        # science_list = [0]*len(list_of_sciencefiles)
+        coverages = [0]*len(list_of_sciencefiles)
+        for ii, kk in enumerate(science_names):
+            fitsfile = fits.open(kk)
+            fitsfile_common, coverage = reproject_interp(fitsfile, fits.open(science_names[0])[0].header, hdu_in=0)
+            science = ccdproc.CCDData(data=fitsfile_common, meta=fitsfile[0].header, unit="adu")
+            science_list[ii] = science
+            coverages[ii] = ccdproc.CCDData(data=coverage, meta=fitsfile[0].header, unit="adu")
 
         self.combined_science = ccdproc.combine(science_list, method="median")
         self.combined_coverage = ccdproc.combine(coverages, method="sum")
 
-        self.master_science = ccdproc.cosmicray_lacosmic(self.combined_science, sigclip=5)
 
-
-
-        # outfile = fits.open(list_of_sciencefiles[0])
-        # outfile[1].data = self.master_science.data
-        # outfile[1].header = self.master_science.header
         header0 = fits.open(list_of_sciencefiles[0])[0].header
         for key in header0:
             # print(str(key), header0[str(key)])
             if "COMMENT" in key:
                 continue
-            self.master_science.header[str(key)] = header0[str(key)]
+            self.combined_science.header[str(key)] = header0[str(key)]
 
-        # outfile[0].header["NAXIS1"] = np.shape(self.master_science.data)[0]
-        # outfile[0].header["NAXIS2"] = np.shape(self.master_science.data)[1]
-        # outfile[1].header["NAXIS1"] = np.shape(self.master_science.data)[0]
-        # outfile[1].header["NAXIS2"] = np.shape(self.master_science.data)[1]
-
-        # outfile.writeto(self.output_dir+"/"+self.filename+".fits", clobber=True)
-        self.master_science.write(self.output_dir+"/"+self.filename+".fits", overwrite=True)
+        self.combined_science.write(self.output_dir+"/"+self.filename+".fits", overwrite=True)
         # minlim, maxlim = np.percentile(self.master_science, (14, 86))
         # pl.imshow(self.master_science, vmax=maxlim, vmin=minlim, cmap="viridis")
         # pl.show()
