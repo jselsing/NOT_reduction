@@ -119,7 +119,7 @@ class NOTdataset(object):
             flat_bias.data /= np.median(flat_bias.data)
             flat_list[ii] = flat_bias
 
-        self.master_flat = ccdproc.combine(flat_list, method="median", scale=np.median, weight=np.median, sigma_clip=True)
+        self.master_flat = ccdproc.combine(flat_list, method="average", sigma_clip=True)
 
 
         self.master_flat.write(self.output_dir+"/"+self.filename+"_masterflat.fits", overwrite=True)
@@ -152,7 +152,7 @@ class NOTdataset(object):
         coverages = [0]*len(list_of_sciencefiles)
         for ii, kk in enumerate(science_names):
             fitsfile = fits.open(kk)
-            fitsfile_common, coverage = reproject_interp(fitsfile, fits.open(science_names[0])[0].header, hdu_in=0)
+            fitsfile_common, coverage = reproject_exact(fitsfile, fits.open(science_names[0])[0].header, hdu_in=0)
             science = ccdproc.CCDData(data=fitsfile_common, meta=fitsfile[0].header, unit="adu")
             science_list[ii] = science
             coverages[ii] = ccdproc.CCDData(data=coverage, meta=fitsfile[0].header, unit="adu")
