@@ -38,8 +38,12 @@ class NOTdataset(object):
         # Construct datasets based on file categories and image sizes
         self.filelist = glob.glob(self.input_dir + "*.fits")
         self.bias_files = [ii for ii in self.filelist if "bias" in fits.open(ii)[0].header["OBJECT"]]
-        flatnames = ["flatR", "FLAT"]
-        self.flat_files = [ii for ii in self.filelist if fits.open(ii)[0].header["OBJECT"] in flatnames]
+
+        if self.instrument == "AlFOSC":
+            self.flat_files = [ii for ii in self.filelist if "FLAT" in fits.open(ii)[0].header["OBJECT"]]
+        elif self.instrument == "StanCam":
+            self.flat_files = [ii for ii in self.filelist if "flat" in fits.open(ii)[0].header["OBJECT"]]
+
         self.science_files = [ii for ii in self.filelist if "SCIENCE" in fits.open(ii)[0].header["IMAGECAT"]]
 
         # Loop through science files and find unique filter names
@@ -116,7 +120,7 @@ class NOTdataset(object):
             flat = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
             flat_scan = ccdproc.subtract_overscan(flat, fits_section='[5:35, :]')
             flat_bias = ccdproc.subtract_bias(flat_scan, self.master_bias)
-            flat_bias.data /= np.median(flat_bias.data)
+            flat_bias.data /= np.median(flat_bias.data[100:-100, 100:-100])
             flat_list[ii] = flat_bias
 
         self.master_flat = ccdproc.combine(flat_list, method="average", sigma_clip=True)
@@ -137,7 +141,7 @@ class NOTdataset(object):
         for ii, kk in enumerate(list_of_sciencefiles):
             fitsfile = fits.open(kk)
             science = ccdproc.CCDData(data=fitsfile[1].data, meta=fitsfile[1].header, unit="adu")
-
+            # science_cos = ccdproc.cosmicray_lacosmic(science, verbose = True)
             overscan_sub = ccdproc.subtract_overscan(science, fits_section='[5:35, :]')
             bias_sub = ccdproc.subtract_bias(overscan_sub, self.master_bias)
             flat_corr = ccdproc.flat_correct(bias_sub, self.master_flat)
@@ -152,13 +156,13 @@ class NOTdataset(object):
         coverages = [0]*len(list_of_sciencefiles)
         for ii, kk in enumerate(science_names):
             fitsfile = fits.open(kk)
-            fitsfile_common, coverage = reproject_exact(fitsfile, fits.open(science_names[0])[0].header, hdu_in=0)
+            fitsfile_common, coverage = reproject_interp(fitsfile, fits.open(science_names[0])[0].header, hdu_in=0)
             science = ccdproc.CCDData(data=fitsfile_common, meta=fitsfile[0].header, unit="adu")
             science_list[ii] = science
             coverages[ii] = ccdproc.CCDData(data=coverage, meta=fitsfile[0].header, unit="adu")
 
         self.combined_science = ccdproc.combine(science_list, method="median")
-        self.combined_coverage = ccdproc.combine(coverages, method="sum")
+        # self.combined_coverage = ccdproc.combine(coverages, method="sum")
 
 
         header0 = fits.open(list_of_sciencefiles[0])[0].header
@@ -175,10 +179,10 @@ class NOTdataset(object):
 
 def main():
 
-    input_dir = "/Users/jselsing/Work/work_rawDATA/NOT/GRBs/GRB180624A/"
+    input_dir = "/Users/jselsing/Work/work_rawDATA/NOT/GRBs/GRB171010A/"
     outdir = input_dir + "reduced_data"
 
-    instrument = "StanCam"
+    instrument = "AlFOSC"
 
 
     datasets = NOTdataset(input_dir, outdir, instrument)
